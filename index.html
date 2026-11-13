@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Lettura contatore acqua</title>
+  <style>
+    :root {
+      --sfondo: #f4f6fa; --carta: #ffffff; --testo: #1d2433; --tenue: #5b6475;
+      --primario: #0b6bcb; --sul-primario: #ffffff; --bordo: #d9dee8;
+      --errore: #b3261e; --errore-sfondo: #fde7e5; --ok: #146c2e; --ok-sfondo: #e3f4e6;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --sfondo: #12151c; --carta: #1c2029; --testo: #e6e9ef; --tenue: #a3abba;
+        --primario: #8cc4ff; --sul-primario: #062a4d; --bordo: #323846;
+        --errore: #ffb4ab; --errore-sfondo: #4a1714; --ok: #9be3aa; --ok-sfondo: #143d1e;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--sfondo); color: var(--testo);
+      font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 520px; margin: 0 auto; padding: 20px 16px 40px; }
+    h1 { font-size: 1.4rem; margin: 8px 0 16px; display: flex; align-items: center; gap: 8px; }
+    .carta { background: var(--carta); border: 1px solid var(--bordo); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+    .dettaglio { color: var(--tenue); margin: 2px 0; }
+    .avviso { border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+    .avviso.errore { background: var(--errore-sfondo); color: var(--errore); }
+    .avviso.ok { background: var(--ok-sfondo); color: var(--ok); }
+    button, .bottone {
+      display: block; width: 100%; border: 0; border-radius: 12px; padding: 16px;
+      font: inherit; font-weight: 600; cursor: pointer; text-align: center;
+    }
+    .primario { background: var(--primario); color: var(--sul-primario); }
+    .secondario { background: transparent; color: var(--primario); border: 2px solid var(--primario); }
+    .collegamento { background: none; color: var(--primario); padding: 12px; font-weight: 500; text-decoration: underline; }
+    button:disabled { opacity: .5; cursor: default; }
+    .anteprima { width: 100%; border-radius: 12px; margin: 12px 0; display: block; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    input[type=text] {
+      width: 100%; font-size: 1.6rem; padding: 12px; border-radius: 12px;
+      border: 2px solid var(--bordo); background: var(--carta); color: var(--testo);
+    }
+    .spazio { height: 12px; }
+    .nascosto { display: none !important; }
+    .piccolo { font-size: .9rem; color: var(--tenue); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>💧 Lettura contatore acqua</h1>
+
+  <div id="caricamento" class="carta">Caricamento…</div>
+  <div id="errore" class="avviso errore nascosto"></div>
+
+  <section id="contenuto" class="nascosto">
+    <div class="carta">
+      <div id="saluto"></div>
+      <div id="condominio" class="dettaglio"></div>
+      <div id="unita" class="dettaglio"></div>
+      <div id="scadenza" class="dettaglio"></div>
+    </div>
+
+    <div id="stato" class="avviso nascosto"></div>
+
+    <form id="modulo" class="carta nascosto">
+      <div id="sezione-foto">
+        <p>Fai una foto al contatore: inquadra bene tutte le cifre, senza riflessi.</p>
+        <input id="file" type="file" accept="image/*" capture="environment" class="nascosto">
+        <img id="anteprima" class="anteprima nascosto" alt="Anteprima della foto del contatore">
+        <button type="button" id="scatta" class="primario">📷 Scatta la foto</button>
+        <button type="button" id="passa-numero" class="collegamento">Non riesco a fare la foto: scrivo il numero</button>
+      </div>
+
+      <div id="sezione-numero" class="nascosto">
+        <label for="valore">Numero letto sul contatore (m³)</label>
+        <input id="valore" type="text" inputmode="decimal" autocomplete="off" placeholder="Es. 01234,567">
+        <p class="piccolo">Scrivi tutte le cifre che vedi, comprese quelle dopo la virgola (di solito in rosso).</p>
+        <button type="button" id="passa-foto" class="collegamento">Torna alla foto</button>
+      </div>
+
+      <div class="spazio"></div>
+      <button type="submit" id="invia" class="primario" disabled>Invia lettura</button>
+    </form>
+  </section>
+</main>
+
+<script>
+  // Indirizzo della funzione server (supabase/functions/lettura-link).
+  const FUNZIONE = "https://imkyptieujovmilzrvnv.supabase.co/functions/v1/lettura-link";
+
+  const $ = (id) => document.getElementById(id);
+  const token = new URLSearchParams(location.hash.slice(1)).get("t") || "";
+  let foto = null;
+  let manuale = false;
+
+  function mostra(el, visibile) { el.classList.toggle("nascosto", !visibile); }
+
+  function errore(testo) {
+    $("errore").textContent = testo;
+    mostra($("errore"), true);
+  }
+
+  async function chiama(campi) {
+    const form = new FormData();
+    form.append("token", token);
+    for (const [chiave, valore] of Object.entries(campi)) form.append(chiave, valore);
+    let risposta;
+    try {
+      risposta = await fetch(FUNZIONE, { method: "POST", body: form });
+    } catch {
+      throw new Error("Connessione assente. Controlla internet e riprova.");
+    }
+    const dati = await risposta.json().catch(() => ({}));
+    if (!risposta.ok) throw new Error(dati.errore || "Si è verificato un errore. Riprova.");
+    return dati;
+  }
+
+  function leggiNumero(testo) {
+    const pulito = testo.trim().replace(/\s/g, "");
+    if (!pulito) return null;
+    const normalizzato = pulito.includes(",") ? pulito.replace(/\./g, "").replace(",", ".") : pulito;
+    const n = Number(normalizzato);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function aggiornaPulsante() {
+    $("invia").disabled = manuale ? leggiNumero($("valore").value) === null : !foto;
+  }
+
+  function mostraStato(classe, testo) {
+    const el = $("stato");
+    el.className = "avviso " + classe;
+    el.textContent = testo;
+  }
+
+  // Riduce la foto (max 1600 px, JPEG): si carica più in fretta anche con poca rete.
+  async function riduci(file) {
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      const scala = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.naturalWidth * scala);
+      canvas.height = Math.round(img.naturalHeight * scala);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      const blob = await new Promise((ok) => canvas.toBlob(ok, "image/jpeg", 0.85));
+      return blob ? new File([blob], "contatore.jpg", { type: "image/jpeg" }) : file;
+    } catch {
+      return file; // il browser non sa ridurla: la mandiamo com'è
+    }
+  }
+
+  $("scatta").addEventListener("click", () => $("file").click());
+  $("file").addEventListener("change", async () => {
+    const scelto = $("file").files[0];
+    if (!scelto) return;
+    $("scatta").textContent = "Preparo la foto…";
+    foto = await riduci(scelto);
+    $("anteprima").src = URL.createObjectURL(foto);
+    mostra($("anteprima"), true);
+    $("scatta").textContent = "📷 Rifai la foto";
+    $("scatta").className = "secondario";
+    aggiornaPulsante();
+  });
+
+  $("passa-numero").addEventListener("click", () => {
+    manuale = true;
+    mostra($("sezione-foto"), false);
+    mostra($("sezione-numero"), true);
+    $("valore").focus();
+    aggiornaPulsante();
+  });
+  $("passa-foto").addEventListener("click", () => {
+    manuale = false;
+    mostra($("sezione-numero"), false);
+    mostra($("sezione-foto"), true);
+    aggiornaPulsante();
+  });
+  $("valore").addEventListener("input", aggiornaPulsante);
+
+  $("modulo").addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    mostra($("errore"), false);
+    $("invia").disabled = true;
+    $("invia").textContent = "Invio in corso…";
+    try {
+      await chiama(manuale ? { azione: "invia", valore: $("valore").value } : { azione: "invia", foto });
+      mostra($("modulo"), false);
+      mostraStato("ok", "✅ Lettura inviata. Grazie! L'amministratore la controllerà a breve.");
+    } catch (e) {
+      errore(e.message);
+      $("invia").textContent = "Invia lettura";
+      aggiornaPulsante();
+    }
+  });
+
+  async function avvia() {
+    if (!/^[0-9a-f]{64}$/.test(token)) {
+      mostra($("caricamento"), false);
+      errore("Il link non è completo. Apri di nuovo il pulsante nell'email.");
+      return;
+    }
+    try {
+      const d = await chiama({ azione: "info" });
+      $("saluto").textContent = d.nome ? `Gentile ${d.nome},` : "Gentile condòmino,";
+      $("condominio").textContent = d.condominio;
+      $("unita").textContent = d.unita + (d.matricola ? ` · contatore ${d.matricola}` : "");
+      const scadenza = new Date(d.scadenza);
+      const scaduta = scadenza < new Date();
+      $("scadenza").textContent = (scaduta ? "Scadenza passata: " : "Da inviare entro il ") +
+        scadenza.toLocaleDateString("it-IT");
+      mostra($("caricamento"), false);
+      mostra($("contenuto"), true);
+
+      if (d.stato === "ricevuta") {
+        mostraStato("ok", "✅ Lettura già inviata. Grazie! L'amministratore la sta controllando.");
+      } else if (d.stato === "approvata") {
+        mostraStato("ok", "✅ Lettura già ricevuta e approvata. Grazie!");
+      } else {
+        if (d.stato === "rifiutata") {
+          const motivo = d.nota ? `: ${d.nota.trim().replace(/[.!]?$/, ".")}` : ".";
+          mostraStato("errore", `La lettura precedente non è stata accettata${motivo} Inviala di nuovo, per favore.`);
+        }
+        mostra($("modulo"), true);
+      }
+      if (d.stato !== "in_attesa") mostra($("stato"), true);
+    } catch (e) {
+      mostra($("caricamento"), false);
+      errore(e.message);
+    }
+  }
+
+  avvia();
+</script>
+</body>
+</html>
